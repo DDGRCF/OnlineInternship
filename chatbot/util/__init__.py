@@ -2,6 +2,4 @@ from .file_util import *
 from .model_util import *
 from .config_util import *
 
-_all_ = ['parse_files', 'Config', 
-         'LLaMA2', 'ModelType', 'BackendType', 'ModelFactory', 
-         'get_prompt']
+_all_ = ['parse_files', 'Config', 'LLaMA2', 'ModelType', 'BackendType', 'ModelFactory']

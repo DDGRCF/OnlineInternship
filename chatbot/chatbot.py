@@ -4,11 +4,21 @@ import time
 import streamlit as st
 from loguru import logger
 
-from util import Config, ModelFactory, parse_files
+from util import Config, ModelFactory, ModelType, parse_files
 
 CONFIG = Config()
 
-def parameters_set(st: st):
+# logger
+if len(CONFIG.log_dir) == 0:
+    CONFIG.log_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "logs")
+    os.makedirs(CONFIG.log_dir, exist_ok = True)
+    current_time = time.localtime(time.time())
+    current_time_str = time.strftime("%Y-%m-%d_%H-%M-%S", current_time)
+    log_file = os.path.join(CONFIG.log_dir, f"{current_time_str}_chatbot.log")
+    logger.add(log_file, rotation="50MB")
+
+
+def run_app_ui():
     if 'chat_dialogue' not in st.session_state:
         st.session_state['chat_dialogue'] = []
     if 'temperature' not in st.session_state:
@@ -23,10 +33,11 @@ def parameters_set(st: st):
         st.session_state['system_prompt'] =  CONFIG.system_prompt
     if 'string_dialogue' not in st.session_state:
         st.session_state['string_dialogue'] = ''
-    if 'llm' not in st.session_state:
-        st.session_state['llm'] = "LLaMA2"
+    if 'model' not in st.session_state:
+        st.session_state['model'] = CONFIG.model
+    if 'model_path' not in st.session_state:
+        st.session_state['model_path'] = CONFIG.model_path
 
-def ui_set(st: st):
     # main config
     custom_css = """
         <style>
@@ -45,7 +56,6 @@ def ui_set(st: st):
     st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
     # left sider 
-    st.sidebar.title("Hello🤗, I'am CodeAssistant")
 
     # model config
     model_expander_css = """
@@ -55,32 +65,46 @@ def ui_set(st: st):
     """
 
     left_sidebar = st.sidebar
+    left_sidebar.title("Hello🤗, I'am CodeAssistant")
 
-    model_title = left_sidebar.container()
+    model_options = left_sidebar.container()
+    model_selected_title = model_options.container()
 
-    model_expander = left_sidebar.expander("👉Change config? Expand here!👈")
+    model_expander = model_options.expander("👉Change config? Expand here!👈")
     model_expander.markdown(model_expander_css, unsafe_allow_html=True)
 
-    selected_option = model_expander.selectbox('Choose a LLaMA2 model:', ['LLaMA2-70B', 'LLaMA2-13B', 'LLaMA2-7B'], key='model')
+    model_expander_selected_option = model_expander.container()
+    model_proto_selected, model_path_input = model_expander.columns([2, 1])
+    model_proto_selected.selectbox("which box", ModelType.get_all_model_name(), label_visibility = "collapsed")
+    model_path_input.text_input("add new model path: ", "", label_visibility = "collapsed") # TODO:
+
     st.session_state['temperature'] = model_expander.slider('Temperature:', min_value=0.01, max_value=5.0, value=0.1, step=0.01)
     st.session_state['top_p'] = model_expander.slider('Top P:', min_value=0.01, max_value=1.0, value=0.9, step=0.01)
     st.session_state['max_seq_len'] = model_expander.slider('Max Sequence Length:', min_value=64, max_value=4096, value=2048, step=8)
     st.session_state['top_k'] = model_expander.slider('Top K:', min_value=1, max_value=100, value=40, step=1)
-    model_title.markdown(f"<h2>Model: {selected_option}</h2>", unsafe_allow_html=True)
+
+    # model load
+    model = ModelFactory.get(st.session_state.model, model_path = st.session_state.model_path)
+    st.session_state.model_path = model.model_path
+
+    model_proto_list = ModelFactory.keys()
+    model_name_list = []
+    for model_proto in model_proto_list:
+        model_name_list.extend(model_proto.get_name_list())
+    model_index = 0
+    if model.model_name in model_name_list:
+        model_index = model_name_list.index(model.model_name)
+
+    model_selected_option = model_expander_selected_option.selectbox('Choose a model:', model_name_list, index=model_index)
+    st.session_state.model_path = model.get_model_path()[model_selected_option]
+
+    model_selected_title.markdown(f"<h2>Model: {model.model_name}</h2>", unsafe_allow_html=True)
 
     # add code context TODO:
     left_sidebar.markdown(f"<h2>Add Context</h2>", unsafe_allow_html=True)
     upload_files = left_sidebar.file_uploader("Please choose files or dirs to add context", accept_multiple_files=True, label_visibility="collapsed")
     parse_files(upload_files)
 
-
-def load_check(st: st):
-    pass
-
-
-def chat(st):
-    # recycle to render chat ui
-    model = ModelFactory.get(st.session_state.llm)
     for message in st.session_state.chat_dialogue:
         with st.chat_message("user"):
             st.markdown(message[0])
@@ -105,12 +129,12 @@ def chat(st):
 
             # to generate iterator
             generator = model.do(prompt, 
-                                   st.session_state.chat_dialogue, 
-                                   st.session_state.system_prompt, 
-                                   st.session_state.max_seq_len,
-                                   st.session_state.temperature,
-                                   st.session_state.top_p,
-                                   st.session_state.top_k)
+                                 st.session_state.chat_dialogue, 
+                                 st.session_state.system_prompt, 
+                                 st.session_state.max_seq_len,
+                                 st.session_state.temperature,
+                                 st.session_state.top_p,
+                                 st.session_state.top_k)
 
             # chat response
             chat_response = ""
@@ -121,13 +145,6 @@ def chat(st):
 
         # history
         st.session_state.chat_dialogue.append((prompt, chat_response))
-
-
-def run_app_ui():
-    parameters_set(st)
-    ui_set(st)
-    load_check(st)
-    chat(st)
 
 # streamlit will to recycle to call main func
 def main():

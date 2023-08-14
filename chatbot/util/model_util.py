@@ -15,7 +15,16 @@ class ModelFactory:
     def get(cls, model_type: str, *args, **kwargs):
         MODEL = ModelType.get_model(model_type)
         if MODEL in ModelFactory._MODELS_:
-            return ModelFactory._MODELS_[MODEL]
+            model = ModelFactory._MODELS_[MODEL]
+            if kwargs.get("model_path", None):
+                model_path = kwargs["model_path"]
+                if len(model.model_path) == 0:
+                    return model
+                if model.model_path != model_path:
+                    ModelFactory.pop(MODEL)
+                    model = MODEL(*args, **kwargs)
+                    ModelFactory._MODELS_[MODEL] = model
+            return model
         else:
             model = MODEL(*args, **kwargs)
             ModelFactory._MODELS_[MODEL] = model
@@ -24,17 +33,46 @@ class ModelFactory:
     @classmethod
     def pop(cls, model_type: str):
         MODEL = ModelType.get_model(model_type)
-        ModelFactory._MODELS_.pop(MODEL, None)
+        return ModelFactory._MODELS_.pop(MODEL, None)
 
     @classmethod
     def has(cls, model_type: str):
         MODEL = ModelType.get_model(model_type)
         return MODEL in ModelFactory._MODELS_
 
+    @classmethod
+    def keys(cls):
+        return list(ModelFactory._MODELS_.keys())
+
+    @classmethod
+    def values(cls):
+        return list(ModelFactory._MODELS_.values())
+
+
 
 class Model(ABC): 
-    def __init__(self, max_tokens):
+    _MODEL_PATH_ = {}
+
+    def __init__(self, max_tokens, model_path):
         self.max_tokens = max_tokens
+        self.model_path = model_path
+
+    def init_path(self):
+        model_filename = ".".join(os.path.splitext(os.path.basename(self.model_path))[:-1])
+        self.model_name = model_filename
+        self.__class__._MODEL_PATH_.update({self.model_name: self.model_path})
+
+    @classmethod
+    def get_name_list(cls):
+        return list(cls._MODEL_PATH_.keys())
+
+    @classmethod
+    def get_path_list(cls):
+        return list(cls._MODEL_PATH_.values())
+
+    @classmethod
+    def get_model_path(cls):
+        return cls._MODEL_PATH_
 
     def do(
         self,
@@ -103,8 +141,28 @@ class Model(ABC):
     ) -> int:
         pass
 
+class LLaMA2BackendType(Enum):
+    TRANSFORMERS = 1
+    GPTQ = 2
+    LLAMA_CPP = 3
+
+    @classmethod
+    def get_type(cls, backend_name: str):
+        backend_type = None
+        backend_name_lower = backend_name.lower()
+        if "transformers" in backend_name_lower:
+            backend_type = LLaMA2BackendType.TRANSFORMERS
+        elif "gptq" in backend_name_lower:
+            backend_type = LLaMA2BackendType.GPTQ
+        elif "cpp" in backend_name_lower:
+            backend_type = LLaMA2BackendType.LLAMA_CPP
+        else:
+            raise Exception("Unknown backend: " + backend_name)
+        return backend_type
 
 class LLaMA2(Model):
+    _MODEL_PATH_ = {}
+
     def __init__(
         self,
         model_path: str = "",
@@ -129,9 +187,8 @@ class LLaMA2(Model):
         Returns:
             A LLaMA2 Wrapper instance
         """
-        super().__init__(max_tokens=max_tokens)
-        self.model_path = model_path
-        self.backend_type = BackendType.get_type(backend_type)
+        super().__init__(max_tokens=max_tokens, model_path=model_path)
+        self.backend_type = LLaMA2BackendType.get_type(backend_type)
         self.load_in_8bit = load_in_8bit
 
         self.model = None
@@ -139,22 +196,20 @@ class LLaMA2(Model):
 
         self.verbose = verbose
 
-        if self.backend_type is BackendType.LLAMA_CPP:
+        if self.backend_type is LLaMA2BackendType.LLAMA_CPP:
             logger.info("Running on backend llama.cpp.")
         else:
             import torch
-
             if torch.cuda.is_available():
                 logger.info("Running on GPU with backend torch transformers.")
             else:
-                logger.info("GPU CUDA not found.")
+                logger.warning("GPU CUDA not found.")
 
-        self.default_llamacpp_path = f"{local_dir}/llama-2-7b-chat.ggmlv3.q4_0.bin"
-        self.default_gptq_path = f"{local_dir}/Llama-2-7b-Chat-GPTQ"
+        self.default_llamacpp_path = f"{local_dir}llama-2-7b-chat.ggmlv3.q4_0.bin"
+        self.default_gptq_path = f"{local_dir}Llama-2-7b-Chat-GPTQ"
         # Download default ggml/gptq model
         if self.model_path == "":
-            logger.info("Model path is empty.")
-            if self.backend_type is BackendType.LLAMA_CPP:
+            if self.backend_type is LLaMA2BackendType.LLAMA_CPP:
                 logger.info("Use default llama.cpp model path: " + self.default_llamacpp_path)
                 if not os.path.exists(self.default_llamacpp_path):
                     logger.info("Start downloading model to: " + self.default_llamacpp_path)
@@ -168,7 +223,7 @@ class LLaMA2(Model):
                 else:
                     logger.info(f"Model exists in {local_dir}llama-2-7b-chat.ggmlv3.q4_0.bin.")
                 self.model_path = self.default_llamacpp_path
-            elif self.backend_type is BackendType.GPTQ:
+            elif self.backend_type is LLaMA2BackendType.GPTQ:
                 logger.info("Use default gptq model path: " + self.default_gptq_path)
                 if not os.path.exists(self.default_gptq_path):
                     logger.info("Start downloading model to: " + self.default_gptq_path)
@@ -184,6 +239,7 @@ class LLaMA2(Model):
 
         self.init_tokenizer()
         self.init_model()
+        self.init_path()
 
     def init_model(self):
         if self.model is None:
@@ -194,11 +250,11 @@ class LLaMA2(Model):
                 self.load_in_8bit,
                 self.verbose,
             )
-        if self.backend_type is not BackendType.LLAMA_CPP:
+        if self.backend_type is not LLaMA2BackendType.LLAMA_CPP:
             self.model.eval()
 
     def init_tokenizer(self):
-        if self.backend_type is not BackendType.LLAMA_CPP:
+        if self.backend_type is not LLaMA2BackendType.LLAMA_CPP:
             if self.tokenizer is None:
                 self.tokenizer = LLaMA2.create_llama2_tokenizer(self.model_path)
 
@@ -231,7 +287,7 @@ class LLaMA2(Model):
     def create_llama2_model(
         cls, model_path, backend_type, max_tokens, load_in_8bit, verbose
     ):
-        if backend_type is BackendType.LLAMA_CPP:
+        if backend_type is LLaMA2BackendType.LLAMA_CPP:
             from llama_cpp import Llama
 
             model = Llama(
@@ -240,7 +296,7 @@ class LLaMA2(Model):
                 n_batch=max_tokens,
                 verbose=verbose,
             )
-        elif backend_type is BackendType.GPTQ:
+        elif backend_type is LLaMA2BackendType.GPTQ:
             from auto_gptq import AutoGPTQForCausalLM
 
             model = AutoGPTQForCausalLM.from_quantized(
@@ -251,7 +307,7 @@ class LLaMA2(Model):
                 use_triton=False,
                 quantize_config=None,
             )
-        elif backend_type is BackendType.TRANSFORMERS:
+        elif backend_type is LLaMA2BackendType.TRANSFORMERS:
             import torch
             from transformers import AutoModelForCausalLM
 
@@ -276,7 +332,7 @@ class LLaMA2(Model):
         self,
         prompt: str,
     ) -> int:
-        if self.backend_type is BackendType.LLAMA_CPP:
+        if self.backend_type is LLaMA2BackendType.LLAMA_CPP:
             input_ids = self.model.tokenize(bytes(prompt, "utf-8"))
             return len(input_ids)
         else:
@@ -323,7 +379,7 @@ class LLaMA2(Model):
         Yields:
             The generated text.
         """
-        if self.backend_type is BackendType.LLAMA_CPP:
+        if self.backend_type is LLaMA2BackendType.LLAMA_CPP:
             inputs = self.model.tokenize(bytes(prompt, "utf-8"))
 
             generator = self.model.generate(
@@ -370,7 +426,6 @@ class LLaMA2(Model):
             for text in streamer:
                 outputs.append(text)
                 yield "".join(outputs)
-
     def run(
         self,
         message: str,
@@ -438,7 +493,7 @@ class LLaMA2(Model):
         Returns:
             Generated text.
         """
-        if self.backend_type is BackendType.LLAMA_CPP:
+        if self.backend_type is LLaMA2BackendType.LLAMA_CPP:
             output = self.model.__call__(
                 prompt,
                 max_tokens=max_new_tokens,
@@ -465,25 +520,6 @@ class LLaMA2(Model):
 
 
 
-class BackendType(Enum):
-    TRANSFORMERS = 1
-    GPTQ = 2
-    LLAMA_CPP = 3
-
-    @classmethod
-    def get_type(cls, backend_name: str):
-        backend_type = None
-        backend_name_lower = backend_name.lower()
-        if "transformers" in backend_name_lower:
-            backend_type = BackendType.TRANSFORMERS
-        elif "gptq" in backend_name_lower:
-            backend_type = BackendType.GPTQ
-        elif "cpp" in backend_name_lower:
-            backend_type = BackendType.LLAMA_CPP
-        else:
-            raise Exception("Unknown backend: " + backend_name)
-        return backend_type
-
 
 class ModelType(Enum):
     LLAMA2 = 1
@@ -505,4 +541,12 @@ class ModelType(Enum):
     @classmethod
     def get_model(cls, model_name: str) -> Any:
         return ModelType.__MODEL_MAP__[ModelType.get_type(model_name).value]
+
+    @classmethod
+    def get_all_model_name(cls):
+        model_names = []
+        for key in ModelType.__MODEL_MAP__.keys():
+            model_names.append(ModelType(key).name)
+        return model_names
+
 
