@@ -19,6 +19,7 @@ if len(CONFIG.log_dir) == 0:
 
 
 def run_app_ui():
+    # parameters
     if 'chat_dialogue' not in st.session_state:
         st.session_state['chat_dialogue'] = []
     if 'temperature' not in st.session_state:
@@ -38,7 +39,7 @@ def run_app_ui():
     if 'model_path' not in st.session_state:
         st.session_state['model_path'] = CONFIG.model_path
 
-    # main config
+    # main css
     custom_css = """
         <style>
             .stTextArea textarea {font-size: 13px;}
@@ -56,14 +57,6 @@ def run_app_ui():
     st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
     # left sider 
-
-    # model config
-    model_expander_css = """
-        <style>
-        .streamlit-expanderHeader p { font-weight: bold; }
-        </style>
-    """
-
     left_sidebar = st.sidebar
     left_sidebar.title("Hello🤗, I'am CodeAssistant")
 
@@ -71,12 +64,14 @@ def run_app_ui():
     model_selected_title = model_options.container()
 
     model_expander = model_options.expander("👉Change config? Expand here!👈")
-    model_expander.markdown(model_expander_css, unsafe_allow_html=True)
 
     model_expander_selected_option = model_expander.container()
-    model_proto_selected, model_path_input = model_expander.columns([2, 1])
-    model_proto_selected.selectbox("which box", ModelType.get_all_model_name(), label_visibility = "collapsed")
-    model_path_input.text_input("add new model path: ", "", label_visibility = "collapsed") # TODO:
+
+    # TODO: add new model
+    model_proto_selected, model_backend_selected, model_path_input = model_expander.columns([1, 1, 1])
+    model_proto_text = model_proto_selected.selectbox("model proto", ModelType.get_all_model_name(), label_visibility = "collapsed", key="model_proto")
+    model_backend_text = model_backend_selected.selectbox("model backend", ModelType.get_all_model_name(), label_visibility = "collapsed", key="model_backend")
+    model_path_text = model_path_input.text_input("new model path: ", "", label_visibility = "collapsed") # TODO:
 
     st.session_state['temperature'] = model_expander.slider('Temperature:', min_value=0.01, max_value=5.0, value=0.1, step=0.01)
     st.session_state['top_p'] = model_expander.slider('Top P:', min_value=0.01, max_value=1.0, value=0.9, step=0.01)
@@ -95,7 +90,7 @@ def run_app_ui():
     if model.model_name in model_name_list:
         model_index = model_name_list.index(model.model_name)
 
-    model_selected_option = model_expander_selected_option.selectbox('Choose a model:', model_name_list, index=model_index)
+    model_selected_option = model_expander_selected_option.selectbox('Choose a model or add new model:', model_name_list, index=model_index)
     st.session_state.model_path = model.get_model_path()[model_selected_option]
 
     model_selected_title.markdown(f"<h2>Model: {model.model_name}</h2>", unsafe_allow_html=True)
@@ -137,10 +132,12 @@ def run_app_ui():
                                  st.session_state.top_k)
 
             # chat response
-            chat_response = ""
+            with st.spinner("Wait for response ..."):
+                chat_response = next(generator)
+
             for item in generator:
-                chat_response = item
                 message_placeholder.markdown(chat_response + "▌")
+                chat_response = item
             message_placeholder.markdown(chat_response)
 
         # history

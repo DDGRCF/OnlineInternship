@@ -53,9 +53,10 @@ class ModelFactory:
 class Model(ABC): 
     _MODEL_PATH_ = {}
 
-    def __init__(self, max_tokens, model_path):
+    def __init__(self, max_tokens, model_path, backend_type = None):
         self.max_tokens = max_tokens
         self.model_path = model_path
+        self.backend_type = backend_type
 
     def init_path(self):
         model_filename = ".".join(os.path.splitext(os.path.basename(self.model_path))[:-1])
@@ -160,6 +161,14 @@ class LLaMA2BackendType(Enum):
             raise Exception("Unknown backend: " + backend_name)
         return backend_type
 
+    @classmethod
+    def get_all_backend_name(cls):
+        backend_names = [LLaMA2BackendType.TRANSFORMERS.name, 
+                         LLaMA2BackendType.GPTQ.name, 
+                         LLaMA2BackendType.LLAMA_CPP.name]
+        return backend_names
+
+
 class LLaMA2(Model):
     _MODEL_PATH_ = {}
 
@@ -187,8 +196,9 @@ class LLaMA2(Model):
         Returns:
             A LLaMA2 Wrapper instance
         """
-        super().__init__(max_tokens=max_tokens, model_path=model_path)
-        self.backend_type = LLaMA2BackendType.get_type(backend_type)
+        super().__init__(max_tokens=max_tokens, 
+                         model_path=model_path, 
+                         backend_type=LLaMA2BackendType.get_type(backend_type))
         self.load_in_8bit = load_in_8bit
 
         self.model = None
@@ -517,8 +527,6 @@ class LLaMA2(Model):
             )
             output = self.tokenizer.decode(output_ids[0])
             return output.split("[/INST]")[1].split("</s>")[0]
-
-
 
 
 class ModelType(Enum):
