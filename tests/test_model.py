@@ -5,7 +5,7 @@ import unittest
 CHATBOT_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "chatbot")
 sys.path.append(CHATBOT_DIR)
 
-from util import ModelType, LLaMA2
+from util import ModelType, LLaMA2, QWen
 
 
 class TestModel(unittest.TestCase):
@@ -18,6 +18,10 @@ class TestModel(unittest.TestCase):
         llama2 = LLaMA2()
         prompt = list(LLaMA2.get_prompt("Hi do you know Pytorch?"))
         self.assertTrue(len(prompt) > 1)
+
+    def test_qwen_cls(self):
+        qwen = QWen()
+
 
 if __name__ == "__main__":
     unittest.main()

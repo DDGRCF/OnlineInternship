@@ -111,7 +111,8 @@ def run_app_ui():
     if prompt := st.chat_input("Please enter your code"):
         with st.chat_message("user"):
             st.markdown(prompt)
-
+        
+        validity = False
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
 
@@ -122,26 +123,34 @@ def run_app_ui():
                 string_dialogue += "Assistant: " + message_tuple[1] + "\n\n"
             st.session_state.string_dialogue = string_dialogue # for debug
 
-            # to generate iterator
-            generator = model.do(prompt, 
-                                 st.session_state.chat_dialogue, 
-                                 st.session_state.system_prompt, 
-                                 st.session_state.max_seq_len,
-                                 st.session_state.temperature,
-                                 st.session_state.top_p,
-                                 st.session_state.top_k)
+            # limit the input
+            validity, st.session_state.chat_dialogue = model.reduce_input_token(prompt, 
+                                                                      st.session_state.chat_dialogue, 
+                                                                      st.session_state.system_prompt,
+                                                                      st.session_state.max_seq_len)
+            if not validity: 
+                st.error("The input is too long!", icon="🚨")
+            else:
+                # stream generator
+                generator = model.do(prompt, 
+                                     st.session_state.chat_dialogue, 
+                                     st.session_state.system_prompt, 
+                                     st.session_state.max_seq_len,
+                                     st.session_state.temperature,
+                                     st.session_state.top_p,
+                                     st.session_state.top_k)
 
-            # chat response
-            with st.spinner("Wait for response ..."):
-                chat_response = next(generator)
+                # chat response
+                with st.spinner(""):
+                    chat_response = next(generator)
 
-            for item in generator:
-                message_placeholder.markdown(chat_response + "▌")
-                chat_response = item
-            message_placeholder.markdown(chat_response)
+                for item in generator:
+                    message_placeholder.markdown(chat_response + "▌")
+                    chat_response = item
+                message_placeholder.markdown(chat_response)
 
-        # history
-        st.session_state.chat_dialogue.append((prompt, chat_response))
+        if validity:
+            st.session_state.chat_dialogue.append((prompt, chat_response))
 
 # streamlit will to recycle to call main func
 def main():

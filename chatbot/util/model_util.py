@@ -102,16 +102,35 @@ class Model(ABC):
             yield response
 
 
-    def check_input_token_length(message: str, 
+    def check_input_token_length(self, message: str, 
                                  chat_history: list[tuple[str, str]], 
-                                 system_prompt: str) -> bool:
+                                 system_prompt: str,
+                                 max_tokens: int = -1) -> bool:
         len =  self.get_input_token_length(message, chat_history, system_prompt)
-        return len < self.model.max_tokens
+        if max_tokens == -1:
+            max_tokens = self.max_tokens
+        return len < max_tokens 
 
-    def reduce_input_token(message: str, 
+    def reduce_input_token(self, message: str, 
                            chat_history: list[tuple[str, str]], 
-                           system_prompt: str) -> bool:
-        return True
+                           system_prompt: str,
+                           max_tokens: int = -1) -> bool:
+        if self.check_input_token_length(message, chat_history, system_prompt, max_tokens):
+            return True, chat_history
+
+        if not self.check_input_token_length(message, [], system_prompt, max_tokens):
+            return False, []
+
+        i = len(chat_history)
+
+        while i > 0 and not self.check_input_token_length(message, chat_history[:i], system_prompt, max_tokens):
+            print(i)
+            i = i - 1
+
+        if i <= 0:
+            return False, []
+
+        return True, chat_history[:i]
 
     @abstractclassmethod
     def run(
@@ -128,9 +147,9 @@ class Model(ABC):
     ) -> Iterator[str]:
         pass
 
-    @staticmethod
+    @classmethod
     @abstractclassmethod
-    def get_prompt(message: str, chat_history: list[tuple[str, str]] = [], system_prompt: str = "") -> str:
+    def get_prompt(cls, message: str, chat_history: list[tuple[str, str]] = [], system_prompt: str = "") -> str:
         pass
 
     @abstractclassmethod
@@ -168,6 +187,27 @@ class LLaMA2BackendType(Enum):
                          LLaMA2BackendType.LLAMA_CPP.name]
         return backend_names
 
+class QWenBackendType(Enum):
+    TRANSFORMERS = 1
+    GPTQ = 2
+
+    @classmethod
+    def get_type(cls, backend_name: str):
+        backend_type = None
+        backend_name_lower = backend_name.lower()
+        if "transformers" in backend_name_lower:
+            backend_type = LLaMA2BackendType.TRANSFORMERS
+        elif "gptq" in backend_name_lower:
+            backend_type = LLaMA2BackendType.GPTQ
+        else:
+            raise Exception("Unknown backend: " + backend_name)
+        return backend_type
+
+    @classmethod
+    def get_all_backend_name(cls):
+        backend_names = [QWenBackendType.TRANSFORMERS.name, QWenBackendType.GPTQ.name]
+        return backend_names
+
 
 class LLaMA2(Model):
     _MODEL_PATH_ = {}
@@ -176,7 +216,7 @@ class LLaMA2(Model):
         self,
         model_path: str = "",
         backend_type: str = "llama.cpp",
-        max_tokens: int = 4012,
+        max_tokens: int = 4000,
         load_in_8bit: bool = True,
         local_dir = "./models/",
         verbose: bool = False,
@@ -269,9 +309,9 @@ class LLaMA2(Model):
                 self.tokenizer = LLaMA2.create_llama2_tokenizer(self.model_path)
 
 
-    @staticmethod
+    @classmethod
     def get_prompt(
-        message: str, chat_history: list[tuple[str, str]] = [], system_prompt: str = ""
+        cls, message: str, chat_history: list[tuple[str, str]] = [], system_prompt: str = ""
     ) -> str:
         """Process message to llama2 prompt with with chat history
         and system_prompt for chatbot.
@@ -328,7 +368,7 @@ class LLaMA2(Model):
                 load_in_8bit=load_in_8bit,
             )
         else:
-            logger.info(backend_type + "not implemented.")
+            logger.warning(backend_type + " not implemented.")
         return model
 
     @classmethod
@@ -529,11 +569,219 @@ class LLaMA2(Model):
             return output.split("[/INST]")[1].split("</s>")[0]
 
 
+class QWen(Model):
+    _MODEL_PATH_ = {}
+
+    def __init__(
+        self,
+        model_path: str = "",
+        backend_type: str = "transformers",
+        max_tokens: int = 4012,
+        load_in_8bit: bool = True,
+        local_dir = "./models/",
+        verbose: bool = False,
+    ):
+        super().__init__(max_tokens=max_tokens, 
+                         model_path=model_path, 
+                         backend_type=QWenBackendType.get_type(backend_type))
+        self.load_in_8bit = load_in_8bit
+
+        self.model = None
+        self.tokenizer = None
+
+        self.verbose = verbose
+
+        import torch
+        if torch.cuda.is_available():
+            logger.info("Running on GPU with backend torch transformers.")
+        else:
+            logger.warning("GPU CUDA not found.")
+
+        self.default_gptq_path = f"{local_dir}Qwen-7B-Chat-GPTQ"
+        # Download default ggml/gptq model
+        if self.model_path == "":
+            logger.info("Use default gptq model path: " + self.default_gptq_path)
+            if not os.path.exists(self.default_gptq_path):
+                logger.info("Start downloading model to: " + self.default_gptq_path)
+                from huggingface_hub import snapshot_download
+
+                snapshot_download(
+                    "openerotica/Qwen-7B-Chat-GPTQ",
+                    local_dir=self.default_gptq_path,
+                )
+            else:
+                logger.info("Model exists in " + self.default_gptq_path)
+            self.model_path = self.default_gptq_path
+
+        self.init_tokenizer()
+        self.init_model()
+        self.init_path()
+
+    def init_model(self):
+        if self.model is None:
+            self.model = QWen.create_llama2_model(
+                self.model_path,
+                self.backend_type,
+                self.max_tokens,
+                self.load_in_8bit,
+                self.verbose,
+            )
+            self.model.eval()
+
+    def init_tokenizer(self):
+        if self.tokenizer is None:
+            self.tokenizer = QWen.create_llama2_tokenizer(self.model_path)
+
+
+    @classmethod
+    def get_prompt(
+        cls, message: str, chat_history: list[tuple[str, str]] = [], system_prompt: str = ""
+    ) -> str:
+        texts = [f"[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n"]
+        for user_input, response in chat_history:
+            texts.append(f"{user_input.strip()} [/INST] {response.strip()} </s><s> [INST] ")
+        texts.append(f"{message.strip()} [/INST]")
+        return "".join(texts)
+
+    @classmethod
+    def create_llama2_model(
+        cls, model_path, backend_type, max_tokens, load_in_8bit, verbose
+    ):
+        if backend_type is QwenBackendType.GPTQ:
+            from auto_gptq import AutoGPTQForCausalLM
+
+            model = AutoGPTQForCausalLM.from_quantized(
+                model_path,
+                use_safetensors=True,
+                trust_remote_code=True,
+                device="cuda:0",
+                use_triton=False,
+                quantize_config=None,
+            )
+        elif backend_type is LLaMA2BackendType.TRANSFORMERS:
+            import torch
+            from transformers import AutoModelForCausalLM
+
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                device_map="auto",
+                torch_dtype=torch.float16,
+                load_in_8bit=load_in_8bit,
+            )
+        else:
+            logger.warning(backend_type + " not implemented.")
+        return model
+
+    @classmethod
+    def create_llama2_tokenizer(cls, model_path):
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        return tokenizer
+
+    def get_token_length(
+        self,
+        prompt: str,
+    ) -> int:
+        input_ids = self.tokenizer([prompt], return_tensors="np")["input_ids"]
+        return input_ids.shape[-1]
+
+    def get_input_token_length(
+        self,
+        message: str,
+        chat_history: list[tuple[str, str]] = [],
+        system_prompt: str = "",
+    ) -> int:
+        prompt = QWen.get_prompt(message, chat_history, system_prompt)
+
+        return self.get_token_length(prompt)
+
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 1000,
+        temperature: float = 0.9,
+        top_p: float = 1.0,
+        top_k: int = 40,
+        repetition_penalty: float = 1.0,
+        **kwargs: Any,
+    ) -> Iterator[str]:
+        from transformers import TextIteratorStreamer
+
+        inputs = self.tokenizer([prompt], return_tensors="pt").to("cuda")
+
+        streamer = TextIteratorStreamer(
+            self.tokenizer, timeout=10.0, skip_prompt=True, skip_special_tokens=True
+        )
+        generate_kwargs = dict(
+            inputs,
+            streamer=streamer,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
+            # num_beams=1,
+        )
+        generate_kwargs = (
+            generate_kwargs if kwargs is None else {**generate_kwargs, **kwargs}
+        )
+
+        t = Thread(target=self.model.generate, kwargs=generate_kwargs)
+        t.start()
+
+        outputs = []
+        for text in streamer:
+            outputs.append(text)
+            yield "".join(outputs)
+
+    def run(
+        self,
+        message: str,
+        chat_history: list[tuple[str, str]] = [],
+        system_prompt: str = "",
+        max_new_tokens: int = 1000,
+        temperature: float = 0.9,
+        top_p: float = 1.0,
+        top_k: int = 40,
+        repetition_penalty: float = 1.0,
+    ) -> Iterator[str]:
+        prompt = QWen.get_prompt(message, chat_history, system_prompt)
+        return self.generate(
+            prompt, max_new_tokens, temperature, top_p, top_k, repetition_penalty
+        )
+
+    def __call__(
+        self,
+        prompt: str,
+        max_new_tokens: int = 1000,
+        temperature: float = 0.9,
+        top_p: float = 1.0,
+        top_k: int = 40,
+        repetition_penalty: float = 1.0,
+        **kwargs: Any,
+    ) -> str:
+        inputs = self.tokenizer([prompt], return_tensors="pt").input_ids.to("cuda")
+        output_ids = self.model.generate(
+            inputs=inputs,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
+            **kwargs,
+        )
+        output = self.tokenizer.decode(output_ids[0])
+        return output.split("[/INST]")[1].split("</s>")[0]
+
+
 class ModelType(Enum):
     LLAMA2 = 1
+    QWEN = 2
 
     __MODEL_MAP__ = {
         LLAMA2: LLaMA2,
+        QWEN: QWen,
     }
 
     @classmethod
@@ -542,6 +790,8 @@ class ModelType(Enum):
         model_type_lower = model_name.lower()
         if "llama2" in model_type_lower:
             model_type = ModelType.LLAMA2
+        elif "qwen" in model_type_lower:
+            model_type = ModelType.QWEN
         else:
             raise Exception("Unknown model: " + model_name)
         return model_type
