@@ -38,8 +38,6 @@ def run_app_ui():
         st.session_state['model'] = CONFIG.model
     if 'model_path' not in st.session_state:
         st.session_state['model_path'] = CONFIG.model_path
-    if 'prompt' not in st.session_state:
-        st.session_state['prompt'] = None
 
     # main css
     custom_css = """
@@ -111,12 +109,8 @@ def run_app_ui():
             with st.chat_message("assistant"):
                 st.markdown(message[1])
 
-    if st.session_state.prompt:
-        prompt = st.session_state.prompt;
-    else:
-        prompt = st.chat_input("Please enter your code")
 
-    if prompt:
+    if prompt := st.chat_input("Please enter your code"):
         st.session_state.prompt = None
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -160,12 +154,6 @@ def run_app_ui():
 
         if validity:
             st.session_state.chat_dialogue.append((prompt, chat_response))
-
-    if len(st.session_state.chat_dialogue):
-        _, left_button = st.columns([4, 1])
-        if left_button.button("🔄 regenerate"):
-            st.session_state.prompt = st.session_state.chat_dialogue[-1][0]
-            st.session_state.chat_dialogue = st.session_state.chat_dialogue[:-1]
 
 # streamlit will to recycle to call main func
 def main():
