@@ -38,12 +38,14 @@ def run_app_ui():
         st.session_state['model'] = CONFIG.model
     if 'model_path' not in st.session_state:
         st.session_state['model_path'] = CONFIG.model_path
+    if 'prompt' not in st.session_state:
+        st.session_state['prompt'] = None
 
     # main css
     custom_css = """
         <style>
-            .stTextArea textarea {font-size: 13px;}
-            div[data-baseweb="select"] > div {font-size: 13px !important;}
+            .stTextArea textarea {font-size: 10px;}
+            div[data-baseweb="select"] > div {font-size: 10px !important;}
         </style>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
@@ -100,18 +102,25 @@ def run_app_ui():
     upload_files = left_sidebar.file_uploader("Please choose files or dirs to add context", accept_multiple_files=True, label_visibility="collapsed")
     parse_files(upload_files)
 
+    
+    # chat message
     for message in st.session_state.chat_dialogue:
         with st.chat_message("user"):
             st.markdown(message[0])
         if len(message[1]):
             with st.chat_message("assistant"):
                 st.markdown(message[1])
-    
-    # chat message
-    if prompt := st.chat_input("Please enter your code"):
+
+    if st.session_state.prompt:
+        prompt = st.session_state.prompt;
+    else:
+        prompt = st.chat_input("Please enter your code")
+
+    if prompt:
+        st.session_state.prompt = None
         with st.chat_message("user"):
             st.markdown(prompt)
-        
+    
         validity = False
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
@@ -151,6 +160,12 @@ def run_app_ui():
 
         if validity:
             st.session_state.chat_dialogue.append((prompt, chat_response))
+
+    if len(st.session_state.chat_dialogue):
+        _, left_button = st.columns([4, 1])
+        if left_button.button("🔄 regenerate"):
+            st.session_state.prompt = st.session_state.chat_dialogue[-1][0]
+            st.session_state.chat_dialogue = st.session_state.chat_dialogue[:-1]
 
 # streamlit will to recycle to call main func
 def main():
